@@ -1,0 +1,132 @@
+pipeline {
+    agent any
+
+    environment {
+        APP_NAME           = 'vm-inventory'
+        PROJECT_ID         = 'enterprise-core-infra'
+        GAR_LOCATION       = 'us-central1'
+        REPOSITORY         = 'vm-inventory-docker'
+        IMAGE_NAME         = "${GAR_LOCATION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${APP_NAME}"
+        VM_INVENTORY_URL   = credentials('vm-inventory-api-url')
+        VM_INVENTORY_TOKEN = credentials('vm-inventory-service-token')
+        DEPLOY_INSTANCE_ID = 'inst-prod-01'
+        DEPLOY_ENV         = 'production'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & Test Backend') {
+            steps {
+                dir('backend') {
+                    sh 'mvn clean test -B'
+                }
+            }
+            post {
+                always {
+                    junit 'backend/target/surefire-reports/*.xml'
+                }
+            }
+        }
+
+        stage('Frontend Lint & Test') {
+            steps {
+                dir('frontend') {
+                    sh 'npm ci'
+                    sh 'npm test -- --run'
+                    sh 'npm run build'
+                }
+            }
+        }
+
+        stage('Container Build & Scan') {
+            steps {
+                script {
+                    def shortCommit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def imageTag = "${IMAGE_NAME}:${BUILD_NUMBER}-${shortCommit}"
+                    
+                    sh "docker build -t ${imageTag} -t ${IMAGE_NAME}:latest ./backend"
+                    sh "trivy image --severity HIGH,CRITICAL --exit-code 0 ${imageTag}"
+                }
+            }
+        }
+
+        stage('Publish Artifact') {
+            steps {
+                script {
+                    def shortCommit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    sh "docker push ${IMAGE_NAME}:${BUILD_NUMBER}-${shortCommit}"
+                    sh "docker push ${IMAGE_NAME}:latest"
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes via Helm') {
+            steps {
+                sh '''
+                    helm upgrade --install vm-inventory ./helm/vm-inventory \
+                        --namespace production --create-namespace \
+                        --set backend.image.tag=${BUILD_NUMBER}-$(git rev-parse --short HEAD) \
+                        --wait --timeout 5m
+                '''
+            }
+        }
+
+        stage('Register Deployment with Inventory') {
+            steps {
+                script {
+                    def shortCommit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    def branchName = env.BRANCH_NAME ?: 'main'
+                    def deployedBy = env.BUILD_USER ?: 'Jenkins-CI'
+                    
+                    sh """
+                        curl -k -X POST "${VM_INVENTORY_URL}/api/deployments" \
+                            -H "Content-Type: application/json" \
+                            -H "Authorization: Bearer ${VM_INVENTORY_TOKEN}" \
+                            -d '{
+                                "instanceId": "${DEPLOY_INSTANCE_ID}",
+                                "applicationName": "${APP_NAME}",
+                                "artifactName": "${APP_NAME}.jar",
+                                "artifactVersion": "1.0.${BUILD_NUMBER}",
+                                "buildNumber": "#${BUILD_NUMBER}",
+                                "gitCommitId": "${shortCommit}",
+                                "branch": "${branchName}",
+                                "deploymentSource": "Jenkins",
+                                "deployedBy": "${deployedBy}",
+                                "deploymentStatus": "SUCCESS"
+                            }'
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            script {
+                def shortCommit = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                sh """
+                    curl -k -X POST "${VM_INVENTORY_URL}/api/deployments" \
+                        -H "Content-Type: application/json" \
+                        -H "Authorization: Bearer ${VM_INVENTORY_TOKEN}" \
+                        -d '{
+                            "instanceId": "${DEPLOY_INSTANCE_ID}",
+                            "applicationName": "${APP_NAME}",
+                            "artifactName": "${APP_NAME}.jar",
+                            "artifactVersion": "1.0.${BUILD_NUMBER}",
+                            "buildNumber": "#${BUILD_NUMBER}",
+                            "gitCommitId": "${shortCommit}",
+                            "branch": "${env.BRANCH_NAME ?: 'main'}",
+                            "deploymentSource": "Jenkins",
+                            "deployedBy": "Jenkins-CI",
+                            "deploymentStatus": "FAILED"
+                        }' || true
+                """
+            }
+        }
+    }
+}

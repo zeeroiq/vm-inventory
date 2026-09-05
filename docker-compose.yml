@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: vm-inventory-db
+    environment:
+      POSTGRES_DB: vminventory
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5442:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d vminventory"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - vm-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vm-inventory-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/vminventory
+      - SPRING_DATASOURCE_USERNAME=admin
+      - SPRING_DATASOURCE_PASSWORD=password
+      - GCP_CLIENT_MODE=mock
+      - JWT_SECRET=vm-artifact-inventory-secret-key-32-chars-long-minimum!
+      - MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE=health,info,metrics
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - vm-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: vm-inventory-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=/api
+    depends_on:
+      - backend
+    networks:
+      - vm-network
+
+volumes:
+  pgdata:
+
+networks:
+  vm-network:
+    driver: bridge

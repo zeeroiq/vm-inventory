@@ -1,0 +1,36 @@
+# OS & Editor Files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+.idea/
+*.iml
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Build artifacts & dependencies
+target/
+**/target/
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+
+# Logs & scratch
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment
+.env.local
+.env.*.local
+
+# JaCoCo & coverage
+*.exec
+coverage/
+**/coverage/

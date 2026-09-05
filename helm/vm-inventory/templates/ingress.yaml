@@ -1,0 +1,28 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vm-inventory.fullname" . }}-ingress
+  labels:
+    app.kubernetes.io/name: {{ include "vm-inventory.name" . }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vm-inventory.fullname" . }}-backend
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vm-inventory.fullname" . }}-frontend
+                port:
+                  number: 80
+{{- end }}
